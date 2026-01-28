@@ -25,10 +25,28 @@ pub use server::*;
 #[cfg(feature = "tower")]
 #[cfg_attr(docsrs, doc(cfg(feature = "tower")))]
 mod tower;
+#[cfg(feature = "tower")]
+#[cfg_attr(docsrs, doc(cfg(feature = "tower")))]
+mod peer_service;
+#[cfg(feature = "tower")]
+#[cfg_attr(docsrs, doc(cfg(feature = "tower")))]
+mod raw_message_service;
+#[cfg(feature = "tower")]
+#[cfg_attr(docsrs, doc(cfg(feature = "tower")))]
+mod service_builder;
 use tokio_util::sync::{CancellationToken, DropGuard};
 #[cfg(feature = "tower")]
 #[cfg_attr(docsrs, doc(cfg(feature = "tower")))]
 pub use tower::*;
+#[cfg(feature = "tower")]
+#[cfg_attr(docsrs, doc(cfg(feature = "tower")))]
+pub use peer_service::*;
+#[cfg(feature = "tower")]
+#[cfg_attr(docsrs, doc(cfg(feature = "tower")))]
+pub use raw_message_service::*;
+#[cfg(feature = "tower")]
+#[cfg_attr(docsrs, doc(cfg(feature = "tower")))]
+pub use service_builder::*;
 use tracing::{Instrument as _, instrument};
 #[derive(Error, Debug)]
 #[non_exhaustive]
@@ -328,7 +346,7 @@ impl<R: ServiceRole> std::fmt::Debug for Peer<R> {
 
 type ProxyOutbound<R> = mpsc::Receiver<PeerSinkMessage<R>>;
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct PeerRequestOptions {
     pub timeout: Option<Duration>,
     pub meta: Option<Meta>,
@@ -458,6 +476,35 @@ impl<R: ServiceRole, S: Service<R>> RunningService<R, S> {
     #[inline]
     pub fn cancellation_token(&self) -> RunningServiceCancellationToken {
         RunningServiceCancellationToken(self.cancellation_token.clone())
+    }
+
+    /// Create a builder for adding middleware to the peer
+    ///
+    /// This allows you to wrap the peer with tower middleware to apply
+    /// cross-cutting concerns to outbound peer requests.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// # fn example<R: ServiceRole>(running: &RunningService<R, impl Service<R>>) {
+    /// # let my_middleware = tower::layer::util::Identity::new();
+    /// use rmcp::service::*;
+    /// use tower::ServiceBuilder;
+    ///
+    /// // Add middleware to peer
+    /// let layered_peer = running.peer_builder()
+    ///     .with_layer(|peer_service| {
+    ///         ServiceBuilder::new()
+    ///             .layer(my_middleware)
+    ///             .service(peer_service)
+    ///     });
+    /// # }
+    /// ```
+    #[cfg(feature = "tower")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "tower")))]
+    #[inline]
+    pub fn peer_builder(&self) -> PeerBuilder<R> {
+        PeerBuilder::new(self.peer.clone())
     }
 
     /// Returns true if the service has been closed or cancelled.
