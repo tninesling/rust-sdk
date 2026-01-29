@@ -7,13 +7,17 @@ use http_body::Body;
 use http_body_util::{BodyExt, Full, combinators::BoxBody};
 use tokio_stream::wrappers::ReceiverStream;
 use tokio_util::sync::CancellationToken;
+use tower::Layer;
 
 use super::session::SessionManager;
+use super::session::local::LocalSessionManager;
 use crate::{
-    RoleServer,
-    model::{ClientJsonRpcMessage, ClientRequest, GetExtensions},
+    RoleServer, ServerHandler,
+    model::{ClientJsonRpcMessage, ClientRequest, GetExtensions, ServerInfo},
     serve_server,
-    service::serve_directly,
+    service::{
+        McpMessage, McpOutput, ServiceAdapter, TowerServiceAdapter, serve_directly,
+    },
     transport::{
         OneshotTransport, TransportAdapterIdentity,
         common::{
@@ -517,5 +521,147 @@ where
             .await
             .map_err(internal_error_response("close session"))?;
         Ok(accepted_response())
+    }
+}
+
+// =============================================================================
+// Fluent Builder for StreamableHttpService
+// =============================================================================
+
+/// Builder for creating `StreamableHttpService` with Tower middleware layers
+///
+/// This builder provides a fluent API for configuring a streamable HTTP MCP server
+/// with Tower middleware, similar to `McpServer::layer()`.
+///
+/// # Example
+///
+/// ```rust,no_run
+/// use rmcp::ServerHandler;
+/// use rmcp::transport::streamable_http_server::{
+///     StreamableHttpServiceBuilder, StreamableHttpServerConfig,
+/// };
+///
+/// #[derive(Clone)]
+/// struct MyHandler;
+/// impl ServerHandler for MyHandler {}
+///
+/// # fn example() {
+/// let service = StreamableHttpServiceBuilder::new(|| Ok(MyHandler))
+///     // .layer(LoggingLayer::new())
+///     .build();
+///
+/// // Use with axum:
+/// // let router = axum::Router::new().nest_service("/mcp", service);
+/// # }
+/// ```
+pub struct StreamableHttpServiceBuilder<F, L = tower::layer::util::Identity> {
+    handler_factory: F,
+    layer: L,
+    config: StreamableHttpServerConfig,
+}
+
+impl<F, H> StreamableHttpServiceBuilder<F, tower::layer::util::Identity>
+where
+    F: Fn() -> Result<H, std::io::Error> + Send + Sync + 'static,
+    H: ServerHandler + Clone + Send + Sync + 'static,
+{
+    /// Create a new builder with the given handler factory
+    ///
+    /// The factory is called to create a new handler for each MCP session.
+    pub fn new(handler_factory: F) -> Self {
+        Self {
+            handler_factory,
+            layer: tower::layer::util::Identity::new(),
+            config: StreamableHttpServerConfig::default(),
+        }
+    }
+}
+
+impl<F, L> StreamableHttpServiceBuilder<F, L> {
+    /// Add a Tower middleware layer
+    ///
+    /// Layers are applied to each handler created by the factory.
+    pub fn layer<NewLayer>(self, layer: NewLayer) -> StreamableHttpServiceBuilder<F, tower::layer::util::Stack<NewLayer, L>> {
+        StreamableHttpServiceBuilder {
+            handler_factory: self.handler_factory,
+            layer: tower::layer::util::Stack::new(layer, self.layer),
+            config: self.config,
+        }
+    }
+
+    /// Set the server configuration
+    pub fn config(mut self, config: StreamableHttpServerConfig) -> Self {
+        self.config = config;
+        self
+    }
+
+    /// Set the SSE keep-alive duration
+    pub fn sse_keep_alive(mut self, duration: Duration) -> Self {
+        self.config.sse_keep_alive = Some(duration);
+        self
+    }
+
+    /// Set the SSE retry interval
+    pub fn sse_retry(mut self, duration: Duration) -> Self {
+        self.config.sse_retry = Some(duration);
+        self
+    }
+
+    /// Enable or disable stateful mode
+    pub fn stateful(mut self, stateful: bool) -> Self {
+        self.config.stateful_mode = stateful;
+        self
+    }
+
+    /// Set the cancellation token
+    pub fn cancellation_token(mut self, token: CancellationToken) -> Self {
+        self.config.cancellation_token = token;
+        self
+    }
+
+    /// Build the `StreamableHttpService` with the default local session manager
+    pub fn build<H>(self) -> StreamableHttpService<ServiceAdapter<L::Service, RoleServer>, LocalSessionManager>
+    where
+        F: Fn() -> Result<H, std::io::Error> + Send + Sync + 'static,
+        H: ServerHandler + Clone + Send + Sync + 'static,
+        L: Layer<TowerServiceAdapter<H>> + Clone + Send + Sync + 'static,
+        L::Service: tower_service::Service<McpMessage<RoleServer>, Response = McpOutput<RoleServer>> + Clone + Send + Sync + 'static,
+        <L::Service as tower_service::Service<McpMessage<RoleServer>>>::Error: std::error::Error + Send + Sync + 'static,
+        <L::Service as tower_service::Service<McpMessage<RoleServer>>>::Future: Send,
+    {
+        self.build_with_session_manager(Arc::new(LocalSessionManager::default()))
+    }
+
+    /// Build the `StreamableHttpService` with a custom session manager
+    pub fn build_with_session_manager<H, M>(
+        self,
+        session_manager: Arc<M>,
+    ) -> StreamableHttpService<ServiceAdapter<L::Service, RoleServer>, M>
+    where
+        F: Fn() -> Result<H, std::io::Error> + Send + Sync + 'static,
+        H: ServerHandler + Clone + Send + Sync + 'static,
+        L: Layer<TowerServiceAdapter<H>> + Clone + Send + Sync + 'static,
+        L::Service: tower_service::Service<McpMessage<RoleServer>, Response = McpOutput<RoleServer>> + Clone + Send + Sync + 'static,
+        <L::Service as tower_service::Service<McpMessage<RoleServer>>>::Error: std::error::Error + Send + Sync + 'static,
+        <L::Service as tower_service::Service<McpMessage<RoleServer>>>::Future: Send,
+        M: SessionManager,
+    {
+        let handler_factory = self.handler_factory;
+        let layer = self.layer;
+
+        // Create a factory that wraps each handler with layers
+        let layered_factory = move || {
+            let handler = handler_factory()?;
+            let info: ServerInfo = ServerHandler::get_info(&handler);
+            
+            // Handler -> TowerServiceAdapter -> (apply layers) -> ServiceAdapter
+            let tower_service = TowerServiceAdapter::new(handler);
+            let layered = layer.clone().layer(tower_service);
+            let service = ServiceAdapter::new(layered, info);
+            
+            Ok(service)
+        };
+
+        StreamableHttpService::new(layered_factory, session_manager, self.config)
     }
 }

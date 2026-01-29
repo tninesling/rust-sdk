@@ -147,6 +147,90 @@ where
     }
 }
 
+// Explicit implementation for RoleClient
+#[cfg(feature = "client")]
+impl<S> crate::service::Service<crate::service::RoleClient> for ServiceAdapter<S, crate::service::RoleClient>
+where
+    S: TowerService<McpMessage<crate::service::RoleClient>, Response = McpOutput<crate::service::RoleClient>> + Send + Sync + 'static,
+    S::Error: std::error::Error + Send + Sync + 'static,
+    S::Future: Send,
+{
+    async fn handle_request(
+        &self,
+        request: <crate::service::RoleClient as ServiceRole>::PeerReq,
+        context: RequestContext<crate::service::RoleClient>,
+    ) -> Result<<crate::service::RoleClient as ServiceRole>::Resp, crate::error::ErrorData> {
+        let id = context.id.clone();
+        
+        let msg = McpMessage::Request {
+            id: id.clone(),
+            request,
+            context,
+        };
+
+        let future = {
+            let mut svc = self.inner.lock().await;
+            svc.call(msg)
+        };
+        
+        let output = future
+            .await
+            .map_err(|e| crate::error::ErrorData::internal_error(e.to_string(), None))?;
+
+        match output {
+            McpOutput::Response { id: response_id, result } => {
+                if id != response_id {
+                    return Err(crate::error::ErrorData::internal_error(
+                        format!("Request ID mismatch: {} != {}", id, response_id),
+                        None,
+                    ));
+                }
+                result
+            }
+            McpOutput::Ack => {
+                Err(crate::error::ErrorData::internal_error(
+                    "Received Ack for a request".to_string(),
+                    None,
+                ))
+            }
+        }
+    }
+
+    async fn handle_notification(
+        &self,
+        notification: <crate::service::RoleClient as ServiceRole>::PeerNot,
+        context: NotificationContext<crate::service::RoleClient>,
+    ) -> Result<(), crate::error::ErrorData> {
+        let msg = McpMessage::Notification {
+            notification,
+            context,
+        };
+
+        let future = {
+            let mut svc = self.inner.lock().await;
+            svc.call(msg)
+        };
+        
+        let output = future
+            .await
+            .map_err(|e| crate::error::ErrorData::internal_error(e.to_string(), None))?;
+
+        match output {
+            McpOutput::Ack => Ok(()),
+            McpOutput::Response { .. } => {
+                Err(crate::error::ErrorData::internal_error(
+                    "Received Response for a notification".to_string(),
+                    None,
+                ))
+            }
+        }
+    }
+
+    fn get_info(&self) -> <crate::service::RoleClient as ServiceRole>::Info {
+        self.info.clone()
+    }
+}
+
 /// Helper trait to ensure ServiceAdapter implements Service
 ///
 /// This is a workaround to help the compiler verify trait implementations

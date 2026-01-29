@@ -41,6 +41,13 @@ pub mod server;
 #[cfg_attr(docsrs, doc(cfg(all(feature = "tower", feature = "server"))))]
 pub use server::{McpServer, RunningMcpServer};
 
+#[cfg(all(feature = "tower", feature = "client"))]
+#[cfg_attr(docsrs, doc(cfg(all(feature = "tower", feature = "client"))))]
+pub mod client;
+#[cfg(all(feature = "tower", feature = "client"))]
+#[cfg_attr(docsrs, doc(cfg(all(feature = "tower", feature = "client"))))]
+pub use client::{McpClient, RunningMcpClient};
+
 // re-export
 #[cfg(all(feature = "macros", feature = "server"))]
 #[cfg_attr(docsrs, doc(cfg(all(feature = "macros", feature = "server"))))]
