@@ -46,6 +46,7 @@ url = { version = "2.4", optional = true }
 
 # For tower compatibility
 tower-service = { version = "0.3", optional = true }
+tower = { version = "0.5", optional = true, default-features = false }
 
 # for child process transport
 process-wrap = { version = "9.0", features = ["tokio1"], optional = true }
@@ -127,7 +128,7 @@ transport-streamable-http-server-session = [
   "dep:tokio-stream",
 ]
 # transport-ws = ["transport-io", "dep:tokio-tungstenite"]
-tower = ["dep:tower-service"]
+tower = ["dep:tower-service", "dep:tower"]
 auth = ["dep:oauth2", "__reqwest", "dep:url"]
 schemars = ["dep:schemars"]
 

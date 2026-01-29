@@ -22,9 +22,11 @@
 
 use futures::future::BoxFuture;
 
-use crate::model::{Extensions, Meta};
-use crate::service::{Peer, RxJsonRpcMessage, ServiceRole, TxJsonRpcMessage};
-use crate::ErrorData as McpError;
+use crate::{
+    ErrorData as McpError,
+    model::{Extensions, Meta},
+    service::{Peer, RxJsonRpcMessage, ServiceRole, TxJsonRpcMessage},
+};
 
 /// Context for raw message handling
 ///
@@ -115,7 +117,7 @@ where
         context: RawMessageContext<R>,
     ) -> BoxFuture<'static, Result<RawMessageResponse<R>, McpError>> {
         use std::future::poll_fn;
-        
+
         let mut service = self.service.clone();
         Box::pin(async move {
             poll_fn(|cx| service.poll_ready(cx))
@@ -147,10 +149,7 @@ impl<R: ServiceRole> tower_service::Service<(RxJsonRpcMessage<R>, RawMessageCont
         std::task::Poll::Ready(Ok(()))
     }
 
-    fn call(
-        &mut self,
-        _req: (RxJsonRpcMessage<R>, RawMessageContext<R>),
-    ) -> Self::Future {
+    fn call(&mut self, _req: (RxJsonRpcMessage<R>, RawMessageContext<R>)) -> Self::Future {
         std::future::ready(Ok(RawMessageResponse::Continue))
     }
 }
@@ -158,7 +157,7 @@ impl<R: ServiceRole> tower_service::Service<(RxJsonRpcMessage<R>, RawMessageCont
 /// Helper function to extract metadata from a message
 pub fn extract_message_meta<R: ServiceRole>(message: &RxJsonRpcMessage<R>) -> Meta {
     use crate::model::GetMeta;
-    
+
     match message {
         crate::model::JsonRpcMessage::Request(req) => req.request.get_meta().clone(),
         crate::model::JsonRpcMessage::Notification(not) => not.notification.get_meta().clone(),
@@ -168,11 +167,9 @@ pub fn extract_message_meta<R: ServiceRole>(message: &RxJsonRpcMessage<R>) -> Me
 }
 
 /// Helper function to extract extensions from a message
-pub fn extract_message_extensions<R: ServiceRole>(
-    message: &RxJsonRpcMessage<R>,
-) -> Extensions {
+pub fn extract_message_extensions<R: ServiceRole>(message: &RxJsonRpcMessage<R>) -> Extensions {
     use crate::model::GetExtensions;
-    
+
     match message {
         crate::model::JsonRpcMessage::Request(req) => req.request.extensions().clone(),
         crate::model::JsonRpcMessage::Notification(not) => not.notification.extensions().clone(),
@@ -182,7 +179,9 @@ pub fn extract_message_extensions<R: ServiceRole>(
 }
 
 /// Helper function to get request ID from a message
-pub fn get_message_request_id<R: ServiceRole>(message: &RxJsonRpcMessage<R>) -> Option<crate::model::RequestId> {
+pub fn get_message_request_id<R: ServiceRole>(
+    message: &RxJsonRpcMessage<R>,
+) -> Option<crate::model::RequestId> {
     match message {
         crate::model::JsonRpcMessage::Request(req) => Some(req.id.clone()),
         crate::model::JsonRpcMessage::Response(res) => Some(res.id.clone()),
@@ -190,4 +189,3 @@ pub fn get_message_request_id<R: ServiceRole>(message: &RxJsonRpcMessage<R>) -> 
         crate::model::JsonRpcMessage::Notification(_) => None,
     }
 }
-

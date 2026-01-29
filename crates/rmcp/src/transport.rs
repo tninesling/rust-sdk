@@ -80,6 +80,26 @@ pub mod sink_stream;
 #[cfg_attr(docsrs, doc(cfg(feature = "transport-async-rw")))]
 pub mod async_rw;
 
+#[cfg(feature = "transport-async-rw")]
+#[cfg_attr(docsrs, doc(cfg(feature = "transport-async-rw")))]
+pub mod byte_layer;
+#[cfg(feature = "transport-async-rw")]
+#[cfg_attr(docsrs, doc(cfg(feature = "transport-async-rw")))]
+pub use byte_layer::{
+    ByteCountingLayer, ByteCountingReader, ByteCountingWriter, ByteLayer, ByteLayerExt,
+};
+
+// Keep the old byte_middleware for backward compatibility (non-tower version)
+#[cfg(feature = "transport-async-rw")]
+#[cfg_attr(docsrs, doc(cfg(feature = "transport-async-rw")))]
+pub mod byte_middleware;
+#[cfg(feature = "transport-async-rw")]
+#[cfg_attr(docsrs, doc(cfg(feature = "transport-async-rw")))]
+pub use byte_middleware::{
+    ByteCountingReader as LegacyByteCountingReader, ByteCountingTransport,
+    ByteCountingWriter as LegacyByteCountingWriter, ByteStats,
+};
+
 #[cfg(feature = "transport-worker")]
 #[cfg_attr(docsrs, doc(cfg(feature = "transport-worker")))]
 pub mod worker;

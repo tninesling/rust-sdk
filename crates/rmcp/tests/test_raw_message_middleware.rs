@@ -1,10 +1,12 @@
 //! Integration tests for raw message middleware functionality
 
+use std::sync::{
+    Arc,
+    atomic::{AtomicUsize, Ordering},
+};
+
 use futures::future::BoxFuture;
-use rmcp::model::*;
-use rmcp::service::*;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
+use rmcp::{model::*, service::*};
 
 // Test middleware: Message size validator
 struct MessageSizeValidator {
@@ -22,14 +24,14 @@ impl RawMessageService<RoleClient> for MessageSizeValidator {
             let size = serde_json::to_string(&message)
                 .map_err(|e| ErrorData::internal_error(e.to_string(), None))?
                 .len();
-            
+
             if size > max_size {
                 return Err(ErrorData::invalid_params(
                     format!("Message size {} exceeds maximum {}", size, max_size),
                     None,
                 ));
             }
-            
+
             Ok(RawMessageResponse::Continue)
         })
     }
@@ -72,12 +74,7 @@ impl RawMessageService<RoleClient> for RejectingMiddleware {
         _message: RxJsonRpcMessage<RoleClient>,
         _context: RawMessageContext<RoleClient>,
     ) -> BoxFuture<'static, Result<RawMessageResponse<RoleClient>, ErrorData>> {
-        Box::pin(async move {
-            Err(ErrorData::invalid_request(
-                "Rejected by middleware",
-                None,
-            ))
-        })
+        Box::pin(async move { Err(ErrorData::invalid_request("Rejected by middleware", None)) })
     }
 }
 
@@ -90,10 +87,10 @@ fn test_message_size_validator_structure() {
 #[test]
 fn test_counting_middleware_structure() {
     let (middleware, count) = CountingMiddleware::new();
-    
+
     // Initially count should be 0
     assert_eq!(count.load(Ordering::SeqCst), 0);
-    
+
     // Verify middleware exists
     drop(middleware);
 }
@@ -112,12 +109,13 @@ fn test_service_builder_with_middleware() {
         client_info: Implementation::default(),
         meta: None,
     };
-    
-    let validator = MessageSizeValidator { max_size: 1_000_000 };
-    
-    let builder = ServiceBuilder::<RoleClient>::new(info)
-        .with_raw_message_middleware(validator);
-    
+
+    let validator = MessageSizeValidator {
+        max_size: 1_000_000,
+    };
+
+    let builder = ServiceBuilder::<RoleClient>::new(info).with_raw_message_middleware(validator);
+
     // Builder should compile and be usable
     drop(builder);
 }
@@ -125,16 +123,18 @@ fn test_service_builder_with_middleware() {
 #[test]
 fn test_passthrough_service() {
     use std::task::Poll;
+
     use tower_service::Service as TowerService;
-    
+
     let mut service: PassthroughService = PassthroughService;
-    
+
     // Test poll_ready - need to specify type for the service
     let waker = futures::task::noop_waker();
     let mut cx = std::task::Context::from_waker(&waker);
-    
+
     // Create a dummy message and context for type checking
     type TestInput = (RxJsonRpcMessage<RoleClient>, RawMessageContext<RoleClient>);
-    let result: Poll<Result<(), ErrorData>> = <PassthroughService as TowerService<TestInput>>::poll_ready(&mut service, &mut cx);
+    let result: Poll<Result<(), ErrorData>> =
+        <PassthroughService as TowerService<TestInput>>::poll_ready(&mut service, &mut cx);
     assert!(matches!(result, Poll::Ready(Ok(()))));
 }

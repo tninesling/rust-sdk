@@ -3,8 +3,7 @@
 //! This module provides a builder pattern for constructing services with
 //! middleware at multiple layers (raw message, post-parse, etc.).
 
-use std::marker::PhantomData;
-use std::sync::Arc;
+use std::{marker::PhantomData, sync::Arc};
 
 use crate::service::{RawMessageService, Service, ServiceRole};
 
@@ -236,4 +235,3 @@ impl<R: ServiceRole> HasRawMessageMiddleware<R> for Box<dyn crate::service::DynS
         None
     }
 }
-

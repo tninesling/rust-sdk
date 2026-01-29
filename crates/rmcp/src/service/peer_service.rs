@@ -31,8 +31,10 @@
 //! # }
 //! ```
 
-use std::future::poll_fn;
-use std::task::{Context, Poll};
+use std::{
+    future::poll_fn,
+    task::{Context, Poll},
+};
 
 use futures::future::BoxFuture;
 use tower_service::Service as TowerService;

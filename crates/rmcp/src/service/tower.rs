@@ -145,7 +145,7 @@ where
         poll_fn(|cx| service.poll_ready(cx))
             .await
             .map_err(Into::into)?;
-        
+
         let mcp_request = McpRequest { request, context };
         let resp = service.call(mcp_request).await.map_err(Into::into)?;
         Ok(resp)
@@ -211,7 +211,7 @@ where
             poll_fn(|cx| service.poll_ready(cx))
                 .await
                 .map_err(Into::into)?;
-            
+
             let mcp_notification = McpNotification {
                 notification,
                 context,

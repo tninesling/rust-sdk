@@ -1,10 +1,14 @@
 //! Integration tests for post-parse (typed request) middleware functionality
 
-use rmcp::model::*;
-use rmcp::service::*;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
-use std::task::{Context, Poll};
+use std::{
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
+    task::{Context, Poll},
+};
+
+use rmcp::{model::*, service::*};
 use tower_service::Service as TowerService;
 
 // Test middleware: Request counter with context access
@@ -77,12 +81,11 @@ where
     }
 }
 
-
 #[test]
 fn test_request_counter_middleware_structure() {
     // Mock service
     struct MockService;
-    
+
     impl TowerService<McpRequest<RoleClient>> for MockService {
         type Response = ClientResult;
         type Error = ErrorData;
@@ -96,13 +99,13 @@ fn test_request_counter_middleware_structure() {
             futures::future::ready(Ok(ClientResult::EmptyResult(EmptyResult {})))
         }
     }
-    
+
     let mock = MockService;
     let (mut counter, count) = RequestCounterMiddleware::new(mock);
-    
+
     // Initially count should be 0
     assert_eq!(count.load(Ordering::SeqCst), 0);
-    
+
     // Check poll_ready works
     let waker = futures::task::noop_waker();
     let mut cx = Context::from_waker(&waker);
@@ -112,7 +115,7 @@ fn test_request_counter_middleware_structure() {
 #[test]
 fn test_context_validator_structure() {
     struct MockService;
-    
+
     impl TowerService<McpRequest<RoleClient>> for MockService {
         type Response = ClientResult;
         type Error = ErrorData;
@@ -126,10 +129,10 @@ fn test_context_validator_structure() {
             futures::future::ready(Ok(ClientResult::EmptyResult(EmptyResult {})))
         }
     }
-    
+
     let mock = MockService;
     let mut validator = ContextValidator::new(mock);
-    
+
     // Check poll_ready works
     let waker = futures::task::noop_waker();
     let mut cx = Context::from_waker(&waker);
@@ -141,7 +144,7 @@ fn test_service_builder_with_tower_service() {
     // Mock tower service
     #[derive(Clone)]
     struct MockTowerService;
-    
+
     impl TowerService<McpRequest<RoleClient>> for MockTowerService {
         type Response = ClientResult;
         type Error = ErrorData;
@@ -155,16 +158,15 @@ fn test_service_builder_with_tower_service() {
             futures::future::ready(Ok(ClientResult::EmptyResult(EmptyResult {})))
         }
     }
-    
+
     let info = ClientInfo {
         protocol_version: ProtocolVersion::default(),
         capabilities: ClientCapabilities::default(),
         client_info: Implementation::default(),
         meta: None,
     };
-    
-    let _service = ServiceBuilder::<RoleClient>::new(info)
-        .with_tower_service(MockTowerService);
+
+    let _service = ServiceBuilder::<RoleClient>::new(info).with_tower_service(MockTowerService);
 }
 
 #[test]
@@ -172,7 +174,7 @@ fn test_combined_middleware() {
     // Mock tower service
     #[derive(Clone)]
     struct MockTowerService;
-    
+
     impl TowerService<McpRequest<RoleClient>> for MockTowerService {
         type Response = ClientResult;
         type Error = ErrorData;
@@ -186,30 +188,30 @@ fn test_combined_middleware() {
             futures::future::ready(Ok(ClientResult::EmptyResult(EmptyResult {})))
         }
     }
-    
+
     // Raw message middleware
     struct DummyRawMiddleware;
-    
+
     impl RawMessageService<RoleClient> for DummyRawMiddleware {
         fn handle_message(
             &self,
             _message: RxJsonRpcMessage<RoleClient>,
             _context: RawMessageContext<RoleClient>,
-        ) -> futures::future::BoxFuture<'static, Result<RawMessageResponse<RoleClient>, ErrorData>> {
+        ) -> futures::future::BoxFuture<'static, Result<RawMessageResponse<RoleClient>, ErrorData>>
+        {
             Box::pin(async move { Ok(RawMessageResponse::Continue) })
         }
     }
-    
+
     let info = ClientInfo {
         protocol_version: ProtocolVersion::default(),
         capabilities: ClientCapabilities::default(),
         client_info: Implementation::default(),
         meta: None,
     };
-    
+
     // Combine raw message middleware (Layer 2) with tower service (Layer 3)
     let _service = ServiceBuilder::<RoleClient>::new(info)
         .with_raw_message_middleware(DummyRawMiddleware)
         .with_tower_service(MockTowerService);
 }
-

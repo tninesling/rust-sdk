@@ -24,9 +24,6 @@ mod server;
 pub use server::*;
 #[cfg(feature = "tower")]
 #[cfg_attr(docsrs, doc(cfg(feature = "tower")))]
-mod tower;
-#[cfg(feature = "tower")]
-#[cfg_attr(docsrs, doc(cfg(feature = "tower")))]
 mod peer_service;
 #[cfg(feature = "tower")]
 #[cfg_attr(docsrs, doc(cfg(feature = "tower")))]
@@ -34,10 +31,9 @@ mod raw_message_service;
 #[cfg(feature = "tower")]
 #[cfg_attr(docsrs, doc(cfg(feature = "tower")))]
 mod service_builder;
-use tokio_util::sync::{CancellationToken, DropGuard};
 #[cfg(feature = "tower")]
 #[cfg_attr(docsrs, doc(cfg(feature = "tower")))]
-pub use tower::*;
+mod tower;
 #[cfg(feature = "tower")]
 #[cfg_attr(docsrs, doc(cfg(feature = "tower")))]
 pub use peer_service::*;
@@ -47,6 +43,10 @@ pub use raw_message_service::*;
 #[cfg(feature = "tower")]
 #[cfg_attr(docsrs, doc(cfg(feature = "tower")))]
 pub use service_builder::*;
+use tokio_util::sync::{CancellationToken, DropGuard};
+#[cfg(feature = "tower")]
+#[cfg_attr(docsrs, doc(cfg(feature = "tower")))]
+pub use tower::*;
 use tracing::{Instrument as _, instrument};
 #[derive(Error, Debug)]
 #[non_exhaustive]

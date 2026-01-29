@@ -14,6 +14,7 @@ rmcp = { workspace = true, features = [
     "auth",
     "elicitation",
     "schemars",
+    "tower",
 ] }
 tokio = { version = "1", features = [
     "macros",
@@ -41,6 +42,8 @@ uuid = { version = "1.6", features = ["v4", "serde"] }
 serde_urlencoded = "0.7"
 askama = { version = "0.15" }
 tower-http = { version = "0.6", features = ["cors"] }
+tower = { version = "0.5", default-features = false }
+tower-service = "0.3"
 hyper = { version = "1" }
 hyper-util = { version = "0", features = ["server"] }
 tokio-util = { version = "0.7" }
@@ -109,3 +112,11 @@ path = "src/calculator_stdio.rs"
 [[example]]
 name = "elicitation_enum_select"
 path = "src/elicitation_enum_inference.rs"
+
+[[example]]
+name = "byte_counting_example"
+path = "src/byte_counting_example.rs"
+
+[[example]]
+name = "full_tower_stack_example"
+path = "src/full_tower_stack_example.rs"
