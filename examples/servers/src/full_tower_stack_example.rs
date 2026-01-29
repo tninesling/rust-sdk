@@ -1,11 +1,14 @@
 //! Complete Tower Middleware Stack Example
 //!
-//! This example demonstrates middleware at multiple layers:
-//! - Layer 1: Byte-level (counting bytes)
-//! - Layer 2: Pre-parse (JSON-RPC telemetry and logging)
-//! - Layer 4: Peer service (rate limiting outbound requests)
+//! This example demonstrates the ergonomic fluent API for building a complete
+//! middleware stack with layers at different levels:
 //!
-//! Layer 3 (post-parse typed requests) is demonstrated in post_parse_middleware_example.rs
+//! - Layer 0: Byte-level (counting bytes via `.byte_layer()`)
+//! - Layer 1: JSON-RPC (telemetry via `.jsonrpc_layer()`)
+//! - Layer 2: Peer (rate limiting via `.peer_builder().with_layer()`)
+//!
+//! The key improvement is that byte layers are now integrated into the fluent
+//! builder API and applied automatically when `.serve()` is called!
 
 use std::{
     sync::{
@@ -19,12 +22,14 @@ use anyhow::Result;
 use common::calculator::Calculator;
 use futures::future::BoxFuture;
 use rmcp::{
-    RoleServer, ServerHandler, ServiceExt,
+    ErrorData, RoleServer, ServerHandler, ServiceExt,
     model::*,
-    service::*,
+    service::{
+        PeerRequest, RawMessageContext, RawMessageResponse, RawMessageService, RxJsonRpcMessage,
+        ServiceRole, StackBuilder,
+    },
     transport::{ByteCountingLayer, ByteLayer},
 };
-use tower::ServiceBuilder as TowerServiceBuilder;
 use tower_service::Service as TowerService;
 
 mod common;
@@ -85,57 +90,6 @@ impl<R: ServiceRole> RawMessageService<R> for JsonRpcTelemetry {
 
             // Continue processing
             Ok(RawMessageResponse::Continue)
-        })
-    }
-}
-
-// =============================================================================
-// Layer 3: Post-Parse Middleware (Typed Requests)
-// =============================================================================
-
-/// Simple logging middleware for demonstration
-/// In a real application, this could be authentication, authorization, etc.
-#[derive(Clone)]
-struct RequestCountingMiddleware<S> {
-    inner: S,
-    counter: Arc<AtomicU64>,
-}
-
-impl<S> RequestCountingMiddleware<S> {
-    fn new(inner: S, counter: Arc<AtomicU64>) -> Self {
-        Self { inner, counter }
-    }
-}
-
-impl<S> TowerService<McpRequest<RoleServer>> for RequestCountingMiddleware<S>
-where
-    S: TowerService<McpRequest<RoleServer>, Response = ServerResult>,
-    S::Error: Into<ErrorData>,
-    S::Future: Send + 'static,
-{
-    type Response = S::Response;
-    type Error = S::Error;
-    type Future = BoxFuture<'static, Result<Self::Response, Self::Error>>;
-
-    fn poll_ready(
-        &mut self,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Result<(), Self::Error>> {
-        self.inner.poll_ready(cx)
-    }
-
-    fn call(&mut self, req: McpRequest<RoleServer>) -> Self::Future {
-        let count = self.counter.fetch_add(1, Ordering::Relaxed) + 1;
-        tracing::info!("📝 Layer 3: Processing request #{}", count);
-
-        let future = self.inner.call(req);
-        Box::pin(async move {
-            let result = future.await;
-            match &result {
-                Ok(_) => tracing::debug!("✅ Layer 3: Request #{} succeeded", count),
-                Err(_) => tracing::warn!("❌ Layer 3: Request #{} failed", count),
-            }
-            result
         })
     }
 }
@@ -218,23 +172,20 @@ async fn main() -> Result<()> {
 
     println!("🏗️  Complete Tower Middleware Stack Example");
     println!("==========================================\n");
-    println!("This example demonstrates middleware at 3 key layers:\n");
-    println!("  Layer 1: Byte counting (raw bytes)");
-    println!("  Layer 2: JSON-RPC telemetry (pre-parse)");
-    println!("  Layer 4: Rate limiting (outbound requests)");
-    println!("\n  (Layer 3 post-parse is shown in post_parse_middleware_example.rs)\n");
+    println!("This example demonstrates the ergonomic fluent API:");
+    println!("  StackBuilder::new(info)");
+    println!("    .byte_layer(...)        // Layer 0: Byte-level");
+    println!("    .jsonrpc_layer(...)     // Layer 1: JSON-RPC");
+    println!("    .service(...)           // Core service");
+    println!("    .serve(transport)       // Applies layers automatically!\n");
 
     // =========================================================================
-    // Layer 1: Byte-Level Middleware
+    // Setup
     // =========================================================================
-    println!("📊 Setting up Layer 1: Byte counting...");
-
     let byte_counter = Arc::new(AtomicU64::new(0));
-    let byte_layer = ByteCountingLayer::new(byte_counter.clone());
-
-    let (stdin, stdout) = (tokio::io::stdin(), tokio::io::stdout());
-    let counting_stdin = byte_layer.layer_read(stdin);
-    let counting_stdout = byte_layer.layer_write(stdout);
+    let jsonrpc_counter = Arc::new(AtomicU64::new(0));
+    let base_service = Calculator::new();
+    let server_info = ServerHandler::get_info(&base_service);
 
     // Spawn byte counter monitor
     let counter_clone = byte_counter.clone();
@@ -242,54 +193,55 @@ async fn main() -> Result<()> {
         loop {
             tokio::time::sleep(Duration::from_secs(10)).await;
             let total = counter_clone.load(Ordering::Relaxed);
-            tracing::info!("📊 Layer 1: Total bytes transferred: {}", total);
+            tracing::info!("📊 Layer 0: Total bytes transferred: {}", total);
         }
     });
 
     // =========================================================================
-    // Layer 2: Pre-Parse Middleware (Raw Message)
+    // Build the complete stack with fluent API!
     // =========================================================================
-    println!("📊 Setting up Layer 2: JSON-RPC telemetry...");
+    // This demonstrates the ergonomic builder pattern:
+    //   StackBuilder::new(info)
+    //     .byte_layer(layer)          // Layer 0: Byte-level
+    //     .jsonrpc_layer(middleware)  // Layer 1: JSON-RPC
+    //     .service(my_service)        // Core service
+    //     .serve(transport)           // Start (applies byte layers automatically!)
+    
+    println!("🏗️  Building complete middleware stack...");
+    println!("   Layer 0: Byte counting");
+    println!("   Layer 1: JSON-RPC telemetry");
+    println!("   Layer 2: Peer rate limiting\n");
 
-    let jsonrpc_counter = Arc::new(AtomicU64::new(0));
-    let base_service = Calculator::new();
-    let server_info = ServerHandler::get_info(&base_service);
+    let (stdin, stdout) = (tokio::io::stdin(), tokio::io::stdout());
 
-    // =========================================================================
-    // Layer 3: Post-Parse Middleware (Typed Requests)
-    // =========================================================================
-    println!("📝 Layer 3 is demonstrated in post_parse_middleware_example.rs");
-    println!("   For this example, we focus on Layers 1, 2, and 4");
-
-    // Build the service with layer 2
-    let service = ServiceBuilder::new(server_info)
-        // Layer 2: JSON-RPC telemetry middleware
-        .with_raw_message_middleware(JsonRpcTelemetry::new(jsonrpc_counter.clone()))
-        .build(base_service);
-
-    // Start the service
-    let running = service.serve((counting_stdin, counting_stdout)).await?;
+    let running = StackBuilder::<RoleServer>::new(server_info)
+        .byte_layer(ByteCountingLayer::new(byte_counter.clone()))
+        .jsonrpc_layer(JsonRpcTelemetry::new(jsonrpc_counter.clone()))
+        .service(base_service)
+        .serve((stdin, stdout))
+        .await?;
 
     // =========================================================================
     // Layer 4: Peer Service Middleware (Outbound Requests)
     // =========================================================================
     println!("⏱️  Setting up Layer 4: Rate limiting for outbound requests...");
 
+    // Peer middleware is added after the service starts
     let _rate_limited_peer = running.peer_builder().with_layer(|peer_service| {
         SimpleRateLimiter::new(peer_service, Duration::from_millis(100))
     });
 
-    println!("\n✅ All layers configured!");
+    println!("✅ All layers configured!");
     println!("🚀 Server is running with complete middleware stack\n");
     println!("Try connecting with the MCP inspector:");
     println!(
         "  npx @modelcontextprotocol/inspector cargo run --example full_tower_stack_example\n"
     );
 
-    tracing::info!("✅ Server started with multi-layer middleware stack");
-    tracing::info!("   Layer 1: Byte counting");
-    tracing::info!("   Layer 2: JSON-RPC telemetry");
-    tracing::info!("   Layer 4: Rate limiting (100ms between requests)");
+    tracing::info!("✅ Server started with complete middleware stack");
+    tracing::info!("   Layer 0: Byte counting");
+    tracing::info!("   Layer 1: JSON-RPC telemetry");
+    tracing::info!("   Layer 2: Peer rate limiting (100ms between requests)");
 
     running.waiting().await?;
     Ok(())
