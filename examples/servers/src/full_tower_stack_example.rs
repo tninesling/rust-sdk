@@ -1,165 +1,129 @@
-//! Complete Tower Middleware Stack Example
+//! Fluent Tower Middleware Example
 //!
-//! This example demonstrates the ergonomic fluent API for building a complete
-//! middleware stack with layers at different levels:
+//! This example demonstrates the fluent API for building MCP servers
+//! with Tower middleware:
 //!
-//! - Layer 0: Byte-level (counting bytes via `.byte_layer()`)
-//! - Layer 1: JSON-RPC (telemetry via `.jsonrpc_layer()`)
-//! - Layer 2: Peer (rate limiting via `.peer_builder().with_layer()`)
+//! ```text
+//! McpServer::new(server_info)
+//!     .layer(LoggingLayer)
+//!     .layer(TimeoutLayer::new(...))
+//!     .serve(StdioTransport, handler)
+//!     .await?;
+//! ```
 //!
-//! The key improvement is that byte layers are now integrated into the fluent
-//! builder API and applied automatically when `.serve()` is called!
+//! The `serve()` method accepts a `ServerHandler` directly - no need for
+//! explicit conversion to Tower services.
 
 use std::{
     sync::{
         Arc,
         atomic::{AtomicU64, Ordering},
     },
-    time::Duration,
+    task::{Context, Poll},
+    time::Instant,
 };
 
 use anyhow::Result;
 use common::calculator::Calculator;
 use futures::future::BoxFuture;
 use rmcp::{
-    ErrorData, RoleServer, ServerHandler, ServiceExt,
-    model::*,
-    service::{
-        PeerRequest, RawMessageContext, RawMessageResponse, RawMessageService, RxJsonRpcMessage,
-        ServiceRole, StackBuilder,
-    },
-    transport::{ByteCountingLayer, ByteLayer},
+    McpServer, RoleServer, ServerHandler,
+    service::{McpMessage, McpOutput},
+    transport::StdioTransport,
 };
+use tower::Layer;
 use tower_service::Service as TowerService;
 
 mod common;
 
 // =============================================================================
-// Layer 1: Byte-Level Middleware (Transport)
+// Custom Logging Middleware
 // =============================================================================
 
-/// Already implemented: ByteCountingLayer
-/// This operates on raw bytes before any parsing
-
-// =============================================================================
-// Layer 2: Pre-Parse Middleware (Raw JSON-RPC Messages)
-// =============================================================================
-
-/// Telemetry middleware that logs JSON-RPC message metadata
-/// This operates on the raw JSON-RPC level before MCP-specific parsing
-struct JsonRpcTelemetry {
-    message_counter: Arc<AtomicU64>,
-}
-
-impl JsonRpcTelemetry {
-    fn new(counter: Arc<AtomicU64>) -> Self {
-        Self {
-            message_counter: counter,
-        }
-    }
-}
-
-impl<R: ServiceRole> RawMessageService<R> for JsonRpcTelemetry {
-    fn handle_message(
-        &self,
-        message: RxJsonRpcMessage<R>,
-        _context: RawMessageContext<R>,
-    ) -> BoxFuture<'static, Result<RawMessageResponse<R>, ErrorData>> {
-        let count = self.message_counter.fetch_add(1, Ordering::Relaxed) + 1;
-
-        Box::pin(async move {
-            // Log telemetry about the JSON-RPC message
-            // We use a simple count-based log since the message structure is generic
-            let message_type = match &message {
-                JsonRpcMessage::Request(req) => {
-                    format!("Request (id: {:?})", req.id)
-                }
-                JsonRpcMessage::Notification(_) => "Notification".to_string(),
-                JsonRpcMessage::Response(resp) => {
-                    format!("Response (id: {:?})", resp.id)
-                }
-                JsonRpcMessage::Error(err) => {
-                    format!(
-                        "Error (code: {:?}, msg: {})",
-                        err.error.code, err.error.message
-                    )
-                }
-            };
-
-            tracing::info!("📊 Layer 2: JSON-RPC {} #{}", message_type, count);
-
-            // Continue processing
-            Ok(RawMessageResponse::Continue)
-        })
-    }
-}
-
-// =============================================================================
-// Layer 4: Peer Service Middleware (Outbound Requests)
-// =============================================================================
-
-/// Simple rate limiter for outbound requests
+/// A Tower layer that adds logging to MCP message handling
 #[derive(Clone)]
-struct SimpleRateLimiter<S> {
-    inner: S,
-    last_request: Arc<tokio::sync::Mutex<Option<std::time::Instant>>>,
-    min_interval: Duration,
+pub struct LoggingLayer {
+    request_counter: Arc<AtomicU64>,
 }
 
-impl<S> SimpleRateLimiter<S> {
-    fn new(inner: S, min_interval: Duration) -> Self {
+impl LoggingLayer {
+    pub fn new() -> Self {
         Self {
-            inner,
-            last_request: Arc::new(tokio::sync::Mutex::new(None)),
-            min_interval,
+            request_counter: Arc::new(AtomicU64::new(0)),
         }
     }
 }
 
-impl<S, R> TowerService<PeerRequest<R>> for SimpleRateLimiter<S>
+impl Default for LoggingLayer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<S> Layer<S> for LoggingLayer {
+    type Service = LoggingService<S>;
+
+    fn layer(&self, service: S) -> Self::Service {
+        LoggingService {
+            inner: service,
+            request_counter: self.request_counter.clone(),
+        }
+    }
+}
+
+/// The middleware service created by LoggingLayer
+#[derive(Clone)]
+pub struct LoggingService<S> {
+    inner: S,
+    request_counter: Arc<AtomicU64>,
+}
+
+impl<S> TowerService<McpMessage<RoleServer>> for LoggingService<S>
 where
-    S: TowerService<PeerRequest<R>>,
-    S::Future: Send + 'static,
-    R: ServiceRole,
+    S: TowerService<McpMessage<RoleServer>, Response = McpOutput<RoleServer>> + Clone + Send + 'static,
+    S::Error: std::fmt::Debug + Send,
+    S::Future: Send,
 {
     type Response = S::Response;
     type Error = S::Error;
     type Future = BoxFuture<'static, Result<Self::Response, Self::Error>>;
 
-    fn poll_ready(
-        &mut self,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Result<(), Self::Error>> {
+    fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         self.inner.poll_ready(cx)
     }
 
-    fn call(&mut self, req: PeerRequest<R>) -> Self::Future {
-        let last_request = self.last_request.clone();
-        let min_interval = self.min_interval;
-        let future = self.inner.call(req);
+    fn call(&mut self, msg: McpMessage<RoleServer>) -> Self::Future {
+        let count = self.request_counter.fetch_add(1, Ordering::Relaxed) + 1;
+        let start = Instant::now();
 
-        Box::pin(async move {
-            // Check rate limit
-            let mut last = last_request.lock().await;
-            if let Some(last_time) = *last {
-                let elapsed = last_time.elapsed();
-                if elapsed < min_interval {
-                    let wait_time = min_interval - elapsed;
-                    tracing::debug!("⏱️  Layer 4: Rate limiting - waiting {:?}", wait_time);
-                    tokio::time::sleep(wait_time).await;
-                }
+        let msg_desc = match &msg {
+            McpMessage::Request { request, .. } => {
+                format!("Request({:?})", std::mem::discriminant(request))
             }
-            *last = Some(std::time::Instant::now());
-            drop(last);
+            McpMessage::Notification { notification, .. } => {
+                format!("Notification({:?})", std::mem::discriminant(notification))
+            }
+        };
 
-            tracing::debug!("🚀 Layer 4: Sending outbound request");
-            future.await
+        tracing::info!("→ #{} {}", count, msg_desc);
+
+        let mut inner = self.inner.clone();
+        Box::pin(async move {
+            let result = inner.call(msg).await;
+            let elapsed = start.elapsed();
+
+            match &result {
+                Ok(_) => tracing::info!("← #{} OK ({:?})", count, elapsed),
+                Err(e) => tracing::warn!("← #{} ERR: {:?} ({:?})", count, e, elapsed),
+            }
+
+            result
         })
     }
 }
 
 // =============================================================================
-// Main: Assembling the Complete Stack
+// Main
 // =============================================================================
 
 #[tokio::main]
@@ -170,79 +134,32 @@ async fn main() -> Result<()> {
         .with_max_level(tracing::Level::DEBUG)
         .init();
 
-    println!("🏗️  Complete Tower Middleware Stack Example");
-    println!("==========================================\n");
-    println!("This example demonstrates the ergonomic fluent API:");
-    println!("  StackBuilder::new(info)");
-    println!("    .byte_layer(...)        // Layer 0: Byte-level");
-    println!("    .jsonrpc_layer(...)     // Layer 1: JSON-RPC");
-    println!("    .service(...)           // Core service");
-    println!("    .serve(transport)       // Applies layers automatically!\n");
+    // Create the handler
+    let handler = Calculator::new();
+    let server_info = ServerHandler::get_info(&handler);
 
-    // =========================================================================
-    // Setup
-    // =========================================================================
-    let byte_counter = Arc::new(AtomicU64::new(0));
-    let jsonrpc_counter = Arc::new(AtomicU64::new(0));
-    let base_service = Calculator::new();
-    let server_info = ServerHandler::get_info(&base_service);
+    println!("🚀 MCP Server with Fluent Tower API");
+    println!("====================================");
+    println!();
+    println!("API usage:");
+    println!("  McpServer::new(server_info)");
+    println!("      .layer(LoggingLayer::new())");
+    println!("      .serve(StdioTransport, handler)");
+    println!("      .await?;");
+    println!();
 
-    // Spawn byte counter monitor
-    let counter_clone = byte_counter.clone();
-    tokio::spawn(async move {
-        loop {
-            tokio::time::sleep(Duration::from_secs(10)).await;
-            let total = counter_clone.load(Ordering::Relaxed);
-            tracing::info!("📊 Layer 0: Total bytes transferred: {}", total);
-        }
-    });
-
-    // =========================================================================
-    // Build the complete stack with fluent API!
-    // =========================================================================
-    // This demonstrates the ergonomic builder pattern:
-    //   StackBuilder::new(info)
-    //     .byte_layer(layer)          // Layer 0: Byte-level
-    //     .jsonrpc_layer(middleware)  // Layer 1: JSON-RPC
-    //     .service(my_service)        // Core service
-    //     .serve(transport)           // Start (applies byte layers automatically!)
-    
-    println!("🏗️  Building complete middleware stack...");
-    println!("   Layer 0: Byte counting");
-    println!("   Layer 1: JSON-RPC telemetry");
-    println!("   Layer 2: Peer rate limiting\n");
-
-    let (stdin, stdout) = (tokio::io::stdin(), tokio::io::stdout());
-
-    let running = StackBuilder::<RoleServer>::new(server_info)
-        .byte_layer(ByteCountingLayer::new(byte_counter.clone()))
-        .jsonrpc_layer(JsonRpcTelemetry::new(jsonrpc_counter.clone()))
-        .service(base_service)
-        .serve((stdin, stdout))
+    // The fluent API - clean and simple!
+    let server = McpServer::new(server_info)
+        .layer(LoggingLayer::new())
+        .serve(StdioTransport, handler)
         .await?;
 
-    // =========================================================================
-    // Layer 4: Peer Service Middleware (Outbound Requests)
-    // =========================================================================
-    println!("⏱️  Setting up Layer 4: Rate limiting for outbound requests...");
+    println!("✅ Server running with logging middleware");
+    println!();
+    println!("Connect with:");
+    println!("  npx @modelcontextprotocol/inspector cargo run -p mcp-server-examples --example full_tower_stack_example");
+    println!();
 
-    // Peer middleware is added after the service starts
-    let _rate_limited_peer = running.peer_builder().with_layer(|peer_service| {
-        SimpleRateLimiter::new(peer_service, Duration::from_millis(100))
-    });
-
-    println!("✅ All layers configured!");
-    println!("🚀 Server is running with complete middleware stack\n");
-    println!("Try connecting with the MCP inspector:");
-    println!(
-        "  npx @modelcontextprotocol/inspector cargo run --example full_tower_stack_example\n"
-    );
-
-    tracing::info!("✅ Server started with complete middleware stack");
-    tracing::info!("   Layer 0: Byte counting");
-    tracing::info!("   Layer 1: JSON-RPC telemetry");
-    tracing::info!("   Layer 2: Peer rate limiting (100ms between requests)");
-
-    running.waiting().await?;
+    server.wait().await?;
     Ok(())
 }

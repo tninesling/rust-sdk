@@ -34,6 +34,13 @@ pub mod handler;
 pub mod task_manager;
 pub mod transport;
 
+#[cfg(all(feature = "tower", feature = "server"))]
+#[cfg_attr(docsrs, doc(cfg(all(feature = "tower", feature = "server"))))]
+pub mod server;
+#[cfg(all(feature = "tower", feature = "server"))]
+#[cfg_attr(docsrs, doc(cfg(all(feature = "tower", feature = "server"))))]
+pub use server::{McpServer, RunningMcpServer};
+
 // re-export
 #[cfg(all(feature = "macros", feature = "server"))]
 #[cfg_attr(docsrs, doc(cfg(all(feature = "macros", feature = "server"))))]

@@ -89,6 +89,13 @@ pub use byte_layer::{
     ByteCountingLayer, ByteCountingReader, ByteCountingWriter, ByteLayer, ByteLayerExt,
 };
 
+#[cfg(feature = "tower")]
+#[cfg_attr(docsrs, doc(cfg(feature = "tower")))]
+pub mod provider;
+#[cfg(feature = "tower")]
+#[cfg_attr(docsrs, doc(cfg(feature = "tower")))]
+pub use provider::*;
+
 // Keep the old byte_middleware for backward compatibility (non-tower version)
 #[cfg(feature = "transport-async-rw")]
 #[cfg_attr(docsrs, doc(cfg(feature = "transport-async-rw")))]
