@@ -186,6 +186,7 @@ impl StreamableHttpClient for reqwest::Client {
         ) {
             return Ok(StreamableHttpPostResponse::Accepted);
         }
+        let response = response.error_for_status()?;
         let content_type = response.headers().get(reqwest::header::CONTENT_TYPE);
         let session_id = response.headers().get(HEADER_SESSION_ID);
         let session_id = session_id

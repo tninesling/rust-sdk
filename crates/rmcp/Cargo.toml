@@ -251,3 +251,8 @@ path = "tests/test_custom_headers.rs"
 name = "test_sse_concurrent_streams"
 required-features = ["server", "client", "transport-streamable-http-server", "transport-streamable-http-client", "reqwest"]
 path = "tests/test_sse_concurrent_streams.rs"
+
+[[test]]
+name = "test_streamable_http_error_status"
+required-features = ["client", "transport-streamable-http-client-reqwest"]
+path = "tests/test_streamable_http_error_status.rs"
